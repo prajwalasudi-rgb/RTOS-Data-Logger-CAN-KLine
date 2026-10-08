@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (FreeRTOS POSIX port)
+        run: cmake -S . -B build && cmake --build build
+      - name: Ring buffer tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Both designs at 1000 CAN frames/s
+        run: |
+          ./build/rtos_logger --mode sequential --can-rate 1000 --duration 3 --out logs_seq
+          ./build/rtos_logger --mode rtos --can-rate 1000 --duration 3 --out logs_rtos
+          python3 - <<'PY'
+          import json
+          rtos = json.load(open("logs_rtos/stats.json"))
+          seq = json.load(open("logs_seq/stats.json"))
+          for s in (rtos, seq):
+              assert s["can_logged"] + s["can_fifo_overruns"] + s["can_buffer_drops"] == s["can_received"]
+          assert rtos["can_logged_pct"] > 99 and rtos["kline_logged_pct"] > 99, rtos
+          assert seq["can_logged_pct"] < rtos["can_logged_pct"], seq
+          print("sequential", seq["can_logged_pct"], "% / rtos", rtos["can_logged_pct"], "%")
+          PY
+          echo "rtos log lines: $(wc -l < logs_rtos/can.asc)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: logs_*/
